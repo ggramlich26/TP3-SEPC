@@ -8,6 +8,8 @@
 #include <complex.h>
 #include <stdbool.h>
 #include <unistd.h>
+#include <pthread.h>
+#include <sys/syscall.h>
 
 #include "tsp-types.h"
 #include "tsp-job.h"
@@ -34,6 +36,18 @@ int nb_towns=10;
 long int myseed= 0;
 /* nombre de threads */
 int nb_threads=1;
+/* best solution*/
+tsp_path_t sol;
+int sol_len;
+pthread_mutex_t sol_mutex;
+/* Job queue */
+struct tsp_queue q;
+pthread_mutex_t q_mutex;
+/* minimum */
+extern pthread_mutex_t minimum_mutex;
+/* cuts */
+long long int cuts = 0;
+extern pthread_mutex_t cuts_mutex;
 
 /* affichage SVG */
 bool affiche_sol= false;
@@ -69,16 +83,65 @@ static void usage(const char *name) {
   exit (-1);
 }
 
+void *main_tsp(void *arg){
+    unsigned long long perf;
+    struct timespec t1, t2;
+    uint64_t vpres=0;
+	long long int myCuts = 0;
+
+    clock_gettime (CLOCK_REALTIME, &t1);
+
+    /* calculer chacun des travaux */
+    tsp_path_t solution;
+    memset (solution, -1, MAX_TOWNS * sizeof (int));
+    solution[0] = 0;
+	pthread_mutex_lock(&q_mutex);
+    while (!empty_queue (&q, &q_mutex)) {
+        int hops = 0, len = 0;
+        get_job (&q, solution, &hops, &len, &vpres, &q_mutex);
+		pthread_mutex_unlock(&q_mutex);
+
+		//printf("Thread %ld\n", syscall(SYS_gettid));
+	
+	// le noeud est moins bon que la solution courante
+	if (minimum < INT_MAX
+	    && (nb_towns - hops) > 10
+	    && ( (lower_bound_using_hk(solution, hops, len, vpres)) >= minimum 
+		|| (lower_bound_using_lp(solution, hops, len, vpres)) >= minimum)){
+
+		pthread_mutex_lock(&q_mutex);
+		continue;
+	}
+
+	tsp (hops, len, vpres, solution, &myCuts, sol, &sol_len);
+	pthread_mutex_lock(&q_mutex);
+    }
+	pthread_mutex_unlock(&q_mutex);
+
+	/* update cuts */
+	pthread_mutex_lock(&cuts_mutex);
+	cuts += myCuts;
+	pthread_mutex_unlock(&cuts_mutex);
+
+    clock_gettime (CLOCK_REALTIME, &t2);
+    perf = TIME_DIFF (t1,t2);
+	printf("Son thread %ld finished after %lld.%03lld ms\n\n", syscall(SYS_gettid), perf/1000000ll, perf%1000000ll);
+    
+    return 0 ;
+
+}
+
 int main (int argc, char **argv)
 {
     unsigned long long perf;
     tsp_path_t path;
     uint64_t vpres=0;
-    tsp_path_t sol;
-    int sol_len;
-    long long int cuts = 0;
-    struct tsp_queue q;
     struct timespec t1, t2;
+
+	pthread_mutex_init(&q_mutex, NULL);
+	pthread_mutex_init(&sol_mutex, NULL);
+	pthread_mutex_init(&minimum_mutex, NULL);
+	pthread_mutex_init(&cuts_mutex, NULL);
 
     /* lire les arguments */
     int opt;
@@ -126,36 +189,64 @@ int main (int argc, char **argv)
     /* mettre les travaux dans la file d'attente */
     generate_tsp_jobs (&q, 1, 0, vpres, path, &cuts, sol, & sol_len, 3);
     no_more_jobs (&q);
+
+	/* generate other threads */
+	pthread_t *tids = malloc((nb_threads-1)*sizeof(pthread_t));
+	for(int i = 0; i < nb_threads-1; i++){
+		pthread_create(&(tids[i]), NULL, main_tsp, NULL);
+	}
    
-    /* calculer chacun des travaux */
-    tsp_path_t solution;
-    memset (solution, -1, MAX_TOWNS * sizeof (int));
-    solution[0] = 0;
-    while (!empty_queue (&q)) {
-        int hops = 0, len = 0;
-        get_job (&q, solution, &hops, &len, &vpres);
-	
-	// le noeud est moins bon que la solution courante
-	if (minimum < INT_MAX
-	    && (nb_towns - hops) > 10
-	    && ( (lower_bound_using_hk(solution, hops, len, vpres)) >= minimum
-		 || (lower_bound_using_lp(solution, hops, len, vpres)) >= minimum)
-	    )
+	main_tsp(NULL);
+//    /* calculer chacun des travaux */
+//	long long int myCuts = 0;
+//    tsp_path_t solution;
+//    memset (solution, -1, MAX_TOWNS * sizeof (int));
+//    solution[0] = 0;
+//    while (!empty_queue (&q, &q_mutex)) {
+//        int hops = 0, len = 0;
+//        get_job (&q, solution, &hops, &len, &vpres, &q_mutex);
+//	
+//	// le noeud est moins bon que la solution courante
+//	if (minimum < INT_MAX
+//	    && (nb_towns - hops) > 10
+//	    && ( (lower_bound_using_hk(solution, hops, len, vpres)) >= minimum
+//		 || (lower_bound_using_lp(solution, hops, len, vpres)) >= minimum)
+//	    )
+//
+//	  continue;
+//
+//	tsp (hops, len, vpres, solution, &myCuts, sol, &sol_len);
+//    }
+//
+//	/* update cuts */
+//	pthread_mutex_lock(&cuts_mutex);
+//	cuts += myCuts;
+//	pthread_mutex_unlock(&cuts_mutex);
 
-	  continue;
+//    clock_gettime (CLOCK_REALTIME, &t2);
+//    perf = TIME_DIFF (t1,t2);
+//	printf("Main thread finished after %lld.%03lld ms\n\n", perf/1000000ll, perf%1000000ll);
 
-	tsp (hops, len, vpres, solution, &cuts, sol, &sol_len);
-    }
+	/* wait for other threads */
+	for(int i = 0; i < nb_threads-1; i++){
+		pthread_join(tids[i], NULL);
+	}
     
     clock_gettime (CLOCK_REALTIME, &t2);
 
     if (affiche_sol)
-      print_solution_svg (sol, sol_len);
+      //print_solution_svg (sol, sol_len);
+      print_solution_svg_to_file (sol, sol_len);
 
     perf = TIME_DIFF (t1,t2);
     printf("<!-- # = %d seed = %ld len = %d threads = %d time = %lld.%03lld ms ( %lld coupures ) -->\n",
 	   nb_towns, myseed, sol_len, nb_threads,
 	   perf/1000000ll, perf%1000000ll, cuts);
+
+	pthread_mutex_destroy(&q_mutex);
+	pthread_mutex_destroy(&sol_mutex);
+	pthread_mutex_destroy(&minimum_mutex);
+	pthread_mutex_destroy(&cuts_mutex);
 
     return 0 ;
 }

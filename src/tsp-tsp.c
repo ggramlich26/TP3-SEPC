@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <string.h>
 #include <stdint.h>
+#include <pthread.h>
 
 #include "tsp-types.h"
 #include "tsp-genmap.h"
@@ -11,6 +12,9 @@
 
 /* dernier minimum trouvé */
 int minimum;
+pthread_mutex_t minimum_mutex;
+/* access cuts in mutual exclusion */
+pthread_mutex_t cuts_mutex;
 
 /* résolution du problème du voyageur de commerce */
 int present (int city, int hops, tsp_path_t path, uint64_t vpres)
@@ -50,11 +54,15 @@ void tsp (int hops, int len, uint64_t vpres, tsp_path_t path, long long int *cut
 	    int me = path [hops - 1];
 	    int dist = tsp_distance[me][0]; // retourner en 0
             if ( len + dist < minimum ) {
-		    minimum = len + dist;
-		    *sol_len = len + dist;
-		    memcpy(sol, path, nb_towns*sizeof(int));
-		    if (!quiet)
-		      print_solution (path, len+dist);
+			pthread_mutex_lock(&minimum_mutex);
+            if ( len + dist < minimum ) {
+				minimum = len + dist;
+				*sol_len = len + dist;
+				memcpy(sol, path, nb_towns*sizeof(int));
+				if (!quiet)
+				  print_solution (path, len+dist);
+			}
+			pthread_mutex_unlock(&minimum_mutex);
 	    }
     } else {
         int me = path [hops - 1];        

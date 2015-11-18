@@ -4,6 +4,9 @@
 #include <stdint.h>
 #include <string.h>
 #include <assert.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <sys/syscall.h>
 #include "tsp-types.h"
 #include "tsp-tsp.h"
 #include "tsp-lp.h"
@@ -100,26 +103,33 @@ int lower_bound_using_lp(tsp_path_t path, int hops, int len, uint64_t vpres) {
     return 0;
   }
 
-  FILE *f = fopen("toto.lp","w");
+  char myName[32];
+  sprintf(myName, "solver_%ld.lp", syscall(SYS_gettid));
+  FILE *f = fopen(myName,"w");
   save_lp(f, path, hops, len, vpres);
   fclose(f);
 
   double val=0.0;
   FILE *sol=0;
 
+  char openLine[128];
+
   switch(SOLVEUR_GLPSOL) {
   case SOLVEUR_CBC:
-    sol = popen("cbc toto.lp | grep 'Objective value'","r");
+	sprintf(openLine, "cbc %s | grep 'Objective value'", myName);
+    sol = popen(openLine,"r");
     fscanf(sol, "Objective value: %lg",& val);
     fclose(sol);
     break;
   case SOLVEUR_SYMPHONY:
-    sol = popen("symphony -L toto.lp | grep \"Solution Cost: \"","r");
+	sprintf(openLine, "symphony -L %s | grep \"Solution Cost: \"", myName);
+    sol = popen(openLine,"r");
     fscanf(sol, "Solution Cost: %lg",& val);
     fclose(sol);
     break;
   case SOLVEUR_GLPSOL:
-    sol = popen("glpsol --lp toto.lp -o /dev/stdout | grep 'Objective:  L = '","r");
+	sprintf(openLine, "glpsol --lp %s -o /dev/stdout | grep 'Objective:  L = '", myName);
+    sol = popen(openLine,"r");
     fscanf(sol, "Objective:  L =  %lg",& val);
     fclose(sol);
     break;

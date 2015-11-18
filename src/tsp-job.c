@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <pthread.h>
 
 #include "tsp-types.h"
 #include "tsp-job.h"
@@ -28,7 +29,11 @@ void init_queue (struct tsp_queue *q) {
     q->nb = 0;
 }
 
-int empty_queue (struct tsp_queue *q) {
+int empty_queue (struct tsp_queue *q, pthread_mutex_t *q_mutex_p) {
+	//pthread_mutex_lock(q_mutex_p);
+	int result = ((q->first == 0) && (q->end == 1));
+	//pthread_mutex_unlock(q_mutex_p);
+	return result;
     return ((q->first == 0) && (q->end == 1));
 }
 
@@ -56,10 +61,12 @@ void add_job (struct tsp_queue *q, tsp_path_t p, int hops, int len, uint64_t vpr
    q->nb ++;
 }
 
-int get_job (struct tsp_queue *q, tsp_path_t p, int *hops, int *len, uint64_t *vpres) {
+int get_job (struct tsp_queue *q, tsp_path_t p, int *hops, int *len, uint64_t *vpres, pthread_mutex_t *q_mutex_p) {
    struct tsp_cell *ptr;
+   //pthread_mutex_lock(q_mutex_p);
    
    if (q->first == 0) {
+	   //pthread_mutex_unlock(q_mutex_p);
        return 0;
    }
    
@@ -81,6 +88,7 @@ int get_job (struct tsp_queue *q, tsp_path_t p, int *hops, int *len, uint64_t *v
    if (affiche_progress)
      printf("<!- %d / %d %% ->\n",q->nb, q->nbmax);
 
+   //pthread_mutex_unlock(q_mutex_p);
    return 1;
 } 
 
